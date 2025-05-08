@@ -11,7 +11,7 @@ import { generateMockPhoneIds, initializePhoneIds, getPhoneIds, checkAndResetDai
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, AlertCircle } from "lucide-react";
 import { isMockClient } from "@/lib/supabase/client";
 
 const Dashboard = () => {
