@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Lead, CallStatus } from "@/types";
 import { VapiService } from "@/lib/vapiService";
+import { getAvailablePhoneId } from "@/lib/phoneUtils";
 import { PacingControls } from "@/components/PacingControls";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchLeadsFromDatabase } from "@/lib/leadUtils";
@@ -22,12 +23,7 @@ export const CallExecutionController = ({
   const [executionInterval, setExecutionInterval] = useState<NodeJS.Timeout | null>(null);
   const usingMockClient = isMockClient();
   
-  const { data: leads = [] } = useQuery({
-    queryKey: ['leads'],
-    queryFn: fetchLeadsFromDatabase,
-    // Don't attempt to fetch data if we're using the mock client
-    enabled: !usingMockClient
-  });
+  const leads = useUploadedLeads(); // Already imported from "@/lib/leadUtils"
 
   // Set up real-time subscription to listen for lead updates
   useEffect(() => {
@@ -88,7 +84,17 @@ export const CallExecutionController = ({
       const leadToProcess = pendingLeads[0];
       
       // Make the API call to VAPI.AI
-      await VapiService.makeCall(leadToProcess);
+      const phoneId = await getAvailablePhoneId();
+      if (!phoneId) {
+        toast.error("No available phone ID");
+        stopExecution();
+        return;
+      }
+
+      await VapiService.makeCall({
+        ...leadToProcess,
+        phone_id: phoneId
+      });
       
       // Refresh the leads data
       queryClient.invalidateQueries({ queryKey: ['leads'] });
