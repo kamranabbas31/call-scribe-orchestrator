@@ -1,21 +1,9 @@
 
 import { createClient } from '@supabase/supabase-js';
+import { supabase as integrationClient } from '@/integrations/supabase/client';
 
-// Get environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Create the Supabase client
+export const supabase = integrationClient;
 
-// Create a mock client if environment variables are missing (for development purposes)
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn('Missing Supabase URL or Anon Key. Using mock client for development.');
-}
-
-// Create the Supabase client with fallbacks to prevent runtime errors
-// In production, you must set the actual environment variables
-export const supabase = createClient(
-  supabaseUrl || 'https://mock-project.supabase.co',
-  supabaseAnonKey || 'mock-anon-key'
-);
-
-// Utility function to check if we're using a mock client
-export const isMockClient = () => !supabaseUrl || !supabaseAnonKey;
+// Utility function to check if we're using a mock client - now always returns false
+export const isMockClient = () => false;
