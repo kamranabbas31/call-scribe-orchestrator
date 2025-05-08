@@ -1,15 +1,63 @@
 
 import { Lead, CallStatus } from "@/types";
 import { v4 as uuidv4 } from "uuid";
+import { supabase } from './supabase/client';
 
 export const uploadLeads = async (file: File): Promise<Lead[]> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const csv = e.target?.result as string;
         const leads = parseCSV(csv);
+        
+        // Save the leads to Supabase
+        const { error } = await supabase.from('leads').insert(
+          leads.map(lead => ({
+            id: lead.id,
+            name: lead.name,
+            phone_number: lead.phoneNumber,
+            status: lead.status,
+            created_at: lead.createdAt.toISOString()
+          }))
+        );
+        
+        if (error) {
+          console.error('Error saving leads to database:', error);
+          reject(new Error('Failed to save leads to database'));
+          return;
+        }
+        
+        // Update call stats with the new remaining calls
+        const { data: existingStats } = await supabase
+          .from('call_stats')
+          .select('*')
+          .eq('id', '00000000-0000-0000-0000-000000000001')
+          .single();
+          
+        if (existingStats) {
+          await supabase
+            .from('call_stats')
+            .update({
+              remaining_calls: existingStats.remaining_calls + leads.length,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', '00000000-0000-0000-0000-000000000001');
+        } else {
+          await supabase
+            .from('call_stats')
+            .insert({
+              id: '00000000-0000-0000-0000-000000000001',
+              remaining_calls: leads.length,
+              completed_calls: 0,
+              in_progress_calls: 0,
+              failed_calls: 0,
+              total_minutes: 0,
+              total_cost: 0
+            });
+        }
+        
         resolve(leads);
       } catch (error) {
         reject(error);
@@ -22,6 +70,64 @@ export const uploadLeads = async (file: File): Promise<Lead[]> => {
     
     reader.readAsText(file);
   });
+};
+
+export const fetchLeadsFromDatabase = async (): Promise<Lead[]> => {
+  const { data, error } = await supabase
+    .from('leads')
+    .select('*')
+    .order('created_at', { ascending: false });
+    
+  if (error) {
+    console.error('Error fetching leads:', error);
+    throw new Error('Failed to fetch leads from database');
+  }
+  
+  return data.map(item => ({
+    id: item.id,
+    name: item.name,
+    phoneNumber: item.phone_number,
+    phoneId: item.phone_id,
+    status: item.status as CallStatus,
+    disposition: item.disposition,
+    duration: item.duration,
+    cost: item.cost,
+    createdAt: new Date(item.created_at),
+    updatedAt: item.updated_at ? new Date(item.updated_at) : undefined
+  }));
+};
+
+export const fetchCallStats = async () => {
+  const { data, error } = await supabase
+    .from('call_stats')
+    .select('*')
+    .eq('id', '00000000-0000-0000-0000-000000000001')
+    .single();
+    
+  if (error && error.code !== 'PGRST116') { // PGRST116 is "No rows found"
+    console.error('Error fetching call stats:', error);
+    throw new Error('Failed to fetch call stats from database');
+  }
+  
+  if (!data) {
+    return {
+      completedCalls: 0,
+      inProgressCalls: 0,
+      remainingCalls: 0,
+      failedCalls: 0,
+      totalMinutes: 0,
+      totalCost: 0
+    };
+  }
+  
+  return {
+    completedCalls: data.completed_calls,
+    inProgressCalls: data.in_progress_calls,
+    remainingCalls: data.remaining_calls,
+    failedCalls: data.failed_calls,
+    totalMinutes: data.total_minutes,
+    totalCost: data.total_cost
+  };
 };
 
 const parseCSV = (csv: string): Lead[] => {

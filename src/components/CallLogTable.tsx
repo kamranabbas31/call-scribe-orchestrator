@@ -10,12 +10,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Lead, CallStatus } from "@/types";
 import { formatPhoneNumber } from "@/lib/formatters";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface CallLogTableProps {
   leads: Lead[];
+  isLoading?: boolean;
 }
 
-export const CallLogTable = ({ leads }: CallLogTableProps) => {
+export const CallLogTable = ({ leads, isLoading = false }: CallLogTableProps) => {
   const getStatusBadge = (status: CallStatus) => {
     switch (status) {
       case CallStatus.PENDING:
@@ -30,6 +32,39 @@ export const CallLogTable = ({ leads }: CallLogTableProps) => {
         return <Badge variant="outline">{status}</Badge>;
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="rounded-md border overflow-hidden">
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Lead Name</TableHead>
+                <TableHead>Phone Number</TableHead>
+                <TableHead>Phone ID</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Disposition</TableHead>
+                <TableHead>Duration (min)</TableHead>
+                <TableHead>Cost ($)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {[...Array(5)].map((_, index) => (
+                <TableRow key={index}>
+                  {[...Array(7)].map((_, cellIndex) => (
+                    <TableCell key={cellIndex}>
+                      <Skeleton className="h-4 w-full" />
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-md border overflow-hidden">

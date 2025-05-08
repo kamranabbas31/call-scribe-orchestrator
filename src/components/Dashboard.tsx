@@ -5,115 +5,123 @@ import { FileUploader } from "@/components/FileUploader";
 import { CallLogTable } from "@/components/CallLogTable";
 import { CallMetrics } from "@/components/CallMetrics";
 import { CallExecutionController } from "@/components/CallExecutionController";
-import { Lead, CallStats, CallStatus, PhoneId } from "@/types";
-import { uploadLeads } from "@/lib/leadUtils";
-import { generateMockPhoneIds, initializePhoneIds } from "@/lib/phoneUtils";
+import { Lead, CallStats, PhoneId } from "@/types";
+import { uploadLeads, fetchLeadsFromDatabase, fetchCallStats } from "@/lib/leadUtils";
+import { generateMockPhoneIds, initializePhoneIds, getPhoneIds, checkAndResetDailyCounts } from "@/lib/phoneUtils";
 import { toast } from "sonner";
-import { VapiService } from "@/lib/vapiService";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
+import { AlertCircle } from "lucide-react";
 
 const Dashboard = () => {
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [phoneIds, setPhoneIds] = useState<PhoneId[]>([]);
-  const [stats, setStats] = useState<CallStats>({
-    completedCalls: 0,
-    inProgressCalls: 0,
-    remainingCalls: 0,
-    failedCalls: 0,
-    totalMinutes: 0,
-    totalCost: 0,
+  const queryClient = useQueryClient();
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  // Fetch leads from the database
+  const { 
+    data: leads = [], 
+    isLoading: isLeadsLoading,
+    error: leadsError 
+  } = useQuery({
+    queryKey: ['leads'],
+    queryFn: fetchLeadsFromDatabase
   });
 
-  // Initialize phone IDs
-  useEffect(() => {
-    // In a real app, we would fetch this from an API or config
-    const ids = generateMockPhoneIds(400);
-    const initializedIds = initializePhoneIds(ids);
-    setPhoneIds(initializedIds);
-  }, []);
+  // Fetch call stats from the database
+  const {
+    data: stats = {
+      completedCalls: 0,
+      inProgressCalls: 0,
+      remainingCalls: 0,
+      failedCalls: 0,
+      totalMinutes: 0,
+      totalCost: 0
+    },
+    isLoading: isStatsLoading,
+    error: statsError
+  } = useQuery({
+    queryKey: ['callStats'],
+    queryFn: fetchCallStats
+  });
 
-  // Update stats whenever leads change
+  // Fetch phone IDs from the database
+  const {
+    data: phoneIds = [],
+    isLoading: isPhoneIdsLoading,
+    error: phoneIdsError
+  } = useQuery({
+    queryKey: ['phoneIds'],
+    queryFn: getPhoneIds
+  });
+
+  // Initialize phone IDs if needed
   useEffect(() => {
-    const inProgress = leads.filter(lead => lead.status === CallStatus.IN_PROGRESS).length;
-    const completed = leads.filter(lead => lead.status === CallStatus.COMPLETED).length;
-    const failed = leads.filter(lead => lead.status === CallStatus.FAILED).length;
-    const remaining = leads.filter(lead => lead.status === CallStatus.PENDING).length;
+    const initPhoneIds = async () => {
+      try {
+        if (!isPhoneIdsLoading && phoneIds.length === 0) {
+          // In a real app, we would fetch these from a config or database
+          const ids = generateMockPhoneIds(400);
+          await initializePhoneIds(ids);
+          queryClient.invalidateQueries({ queryKey: ['phoneIds'] });
+        }
+      } catch (error) {
+        console.error("Error initializing phone IDs:", error);
+        toast.error("Failed to initialize phone IDs");
+      }
+    };
+
+    initPhoneIds();
+  }, [isPhoneIdsLoading, phoneIds.length, queryClient]);
+
+  // Check and reset daily call counts if needed
+  useEffect(() => {
+    const checkReset = async () => {
+      try {
+        const wasReset = await checkAndResetDailyCounts();
+        if (wasReset) {
+          toast.info("Daily call counts have been reset");
+          queryClient.invalidateQueries({ queryKey: ['phoneIds'] });
+        }
+      } catch (error) {
+        console.error("Error checking daily reset:", error);
+      }
+    };
+
+    checkReset();
     
-    // Calculate total minutes and cost
-    const totalMinutes = leads.reduce((total, lead) => {
-      return total + (lead.duration || 0);
-    }, 0);
-    
-    const totalCost = leads.reduce((total, lead) => {
-      return total + (lead.cost || 0);
-    }, 0);
-    
-    setStats({
-      inProgressCalls: inProgress,
-      completedCalls: completed,
-      failedCalls: failed,
-      remainingCalls: remaining,
-      totalMinutes: Math.round(totalMinutes * 10) / 10,
-      totalCost: Math.round(totalCost * 100) / 100
-    });
-  }, [leads]);
+    // Check every hour
+    const interval = setInterval(checkReset, 60 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [queryClient]);
 
   const handleFileUpload = async (file: File) => {
+    setIsLoading(true);
     try {
       const parsedLeads = await uploadLeads(file);
-      setLeads(parsedLeads);
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['callStats'] });
       toast.success(`Successfully uploaded ${parsedLeads.length} leads`);
     } catch (error) {
       toast.error("Failed to upload file: " + (error as Error).message);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Simulates receiving webhooks from VAPI.AI
-  useEffect(() => {
-    // This interval simulates webhook callbacks from VAPI.AI
-    const webhookSimulation = setInterval(() => {
-      const inProgressLeads = leads.filter(lead => lead.status === CallStatus.IN_PROGRESS);
-      
-      if (inProgressLeads.length === 0) {
-        return;
-      }
-      
-      // Randomly select some in-progress leads to complete
-      const leadsToUpdate = inProgressLeads.filter(() => Math.random() > 0.7);
-      
-      if (leadsToUpdate.length === 0) {
-        return;
-      }
-      
-      // Update the leads with simulated webhook data
-      const updatedLeads = leads.map(lead => {
-        const shouldUpdate = leadsToUpdate.some(l => l.id === lead.id);
-        
-        if (shouldUpdate && lead.status === CallStatus.IN_PROGRESS) {
-          // Mock webhook data
-          const mockWebhookData = {
-            leadId: lead.id,
-            duration: Math.round((Math.random() * 3 + 1) * 10) / 10, // 1-4 minutes
-            disposition: Math.random() > 0.3 ? "Interested" : "Not Interested"
-          };
-          
-          try {
-            // Process the webhook data (in a real app, this would be called from a webhook endpoint)
-            return VapiService.processCallWebhook(mockWebhookData, [lead]);
-          } catch (error) {
-            console.error("Error processing webhook:", error);
-            return lead;
-          }
-        }
-        
-        return lead;
-      });
-      
-      setLeads(updatedLeads);
-      
-    }, 3000); // Check every 3 seconds
-    
-    return () => clearInterval(webhookSimulation);
-  }, [leads]);
+  // Display any errors
+  if (leadsError || statsError || phoneIdsError) {
+    return (
+      <div className="container mx-auto p-4">
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>
+            {leadsError?.message || statsError?.message || phoneIdsError?.message || "An unknown error occurred"}
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="container mx-auto p-4 lg:p-8">
@@ -124,11 +132,7 @@ const Dashboard = () => {
             <p className="text-gray-600">Manage AI-powered outbound calling with VAPI.AI</p>
           </div>
           
-          <CallExecutionController 
-            leads={leads} 
-            onLeadUpdate={setLeads}
-            initialPhoneIds={phoneIds}
-          />
+          <CallExecutionController />
         </header>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -139,7 +143,7 @@ const Dashboard = () => {
           <Card>
             <CardHeader className="flex flex-col md:flex-row justify-between items-start md:items-center space-y-4 md:space-y-0">
               <CardTitle>Lead Management</CardTitle>
-              <FileUploader onUpload={handleFileUpload} disabled={stats.inProgressCalls > 0} />
+              <FileUploader onUpload={handleFileUpload} disabled={isLoading || stats.inProgressCalls > 0} />
             </CardHeader>
           </Card>
           
@@ -148,7 +152,7 @@ const Dashboard = () => {
               <CardTitle>Call Log</CardTitle>
             </CardHeader>
             <CardContent className="pt-4">
-              <CallLogTable leads={leads} />
+              <CallLogTable leads={leads} isLoading={isLeadsLoading} />
             </CardContent>
           </Card>
         </div>

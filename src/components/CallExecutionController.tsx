@@ -2,28 +2,52 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import { Lead, PhoneId, CallStatus } from "@/types";
+import { Lead, CallStatus } from "@/types";
 import { VapiService } from "@/lib/vapiService";
 import { PacingControls } from "@/components/PacingControls";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { fetchLeadsFromDatabase } from "@/lib/leadUtils";
+import { supabase } from "@/lib/supabase/client";
 
 interface CallExecutionControllerProps {
-  leads: Lead[];
-  onLeadUpdate: (updatedLeads: Lead[]) => void;
-  initialPhoneIds: PhoneId[];
   initialPacingRate?: number;
 }
 
 export const CallExecutionController = ({
-  leads,
-  onLeadUpdate,
-  initialPhoneIds,
   initialPacingRate = 1
 }: CallExecutionControllerProps) => {
+  const queryClient = useQueryClient();
   const [isExecuting, setIsExecuting] = useState(false);
   const [pacingRate, setPacingRate] = useState<number>(initialPacingRate);
-  const [phoneIds, setPhoneIds] = useState<PhoneId[]>(initialPhoneIds);
-  const [currentIndex, setCurrentIndex] = useState(0);
   const [executionInterval, setExecutionInterval] = useState<NodeJS.Timeout | null>(null);
+  
+  const { data: leads = [] } = useQuery({
+    queryKey: ['leads'],
+    queryFn: fetchLeadsFromDatabase
+  });
+
+  // Set up real-time subscription to listen for lead updates
+  useEffect(() => {
+    const subscription = supabase
+      .channel('leads-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'leads'
+        },
+        () => {
+          queryClient.invalidateQueries({ queryKey: ['leads'] });
+          queryClient.invalidateQueries({ queryKey: ['callStats'] });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [queryClient]);
   
   // Clean up on unmount
   useEffect(() => {
@@ -58,29 +82,23 @@ export const CallExecutionController = ({
     try {
       const leadToProcess = pendingLeads[0];
       
-      // Make the API call to VAPI.AI (simulated in our service)
-      const { updatedLead, updatedPhoneIds } = await VapiService.makeCall(
-        leadToProcess, 
-        phoneIds
-      );
+      // Make the API call to VAPI.AI
+      await VapiService.makeCall(leadToProcess);
       
-      // Update the leads array with the updated lead
-      const updatedLeads = leads.map(lead => 
-        lead.id === updatedLead.id ? updatedLead : lead
-      );
-      
-      // Update state
-      onLeadUpdate(updatedLeads);
-      setPhoneIds(updatedPhoneIds);
+      // Refresh the leads data
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['callStats'] });
       
     } catch (error) {
       console.error("Error processing lead:", error);
       toast.error(`Failed to process lead: ${(error as Error).message}`);
     }
-  }, [leads, phoneIds, onLeadUpdate]);
+  }, [leads, queryClient]);
   
   const startExecution = useCallback(() => {
-    if (leads.filter(lead => lead.status === CallStatus.PENDING).length === 0) {
+    const pendingLeads = leads.filter(lead => lead.status === CallStatus.PENDING);
+    
+    if (pendingLeads.length === 0) {
       toast.warning("No pending leads to process");
       return;
     }
@@ -106,6 +124,8 @@ export const CallExecutionController = ({
     setIsExecuting(false);
     toast.info("Call execution stopped");
   }, [executionInterval]);
+
+  const pendingCount = leads.filter(lead => lead.status === CallStatus.PENDING).length;
   
   return (
     <div className="flex items-center gap-4">
@@ -119,7 +139,7 @@ export const CallExecutionController = ({
           <Button 
             onClick={startExecution}
             className="bg-blue-600 hover:bg-blue-700"
-            disabled={leads.filter(lead => lead.status === CallStatus.PENDING).length === 0}
+            disabled={pendingCount === 0}
           >
             Start Execution
           </Button>

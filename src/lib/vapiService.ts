@@ -1,9 +1,7 @@
 
-import { Lead, PhoneId, CallStatus } from "@/types";
-import { getNextAvailablePhoneId, incrementPhoneIdUsage } from "./phoneUtils";
-
-// In a real implementation, this would be an environment variable
-const VAPI_API_URL = "https://api.vapi.ai/call"; // Example URL, replace with actual VAPI.AI endpoint
+import { Lead, CallStatus } from "@/types";
+import { supabase } from './supabase/client';
+import { incrementPhoneIdUsage, getNextAvailablePhoneId } from "./phoneUtils";
 
 interface VapiCallParams {
   phoneNumber: string;
@@ -19,44 +17,54 @@ interface VapiCallResponse {
 }
 
 export class VapiService {
-  // This method would be replaced with actual API call in a production environment
+  // Make an actual API call to VAPI.AI
   static async makeCall(
     lead: Lead,
-    phoneIds: PhoneId[],
     dailyLimit: number = 100
-  ): Promise<{ updatedLead: Lead; updatedPhoneIds: PhoneId[] }> {
+  ): Promise<Lead> {
     // Get next available phone ID
-    const phoneId = getNextAvailablePhoneId(phoneIds, dailyLimit);
+    const phoneId = await getNextAvailablePhoneId(dailyLimit);
     
     if (!phoneId) {
       throw new Error("No available phone IDs to make calls");
     }
     
     try {
-      // In a real implementation, this would make an actual API call
-      // const response = await fetch(VAPI_API_URL, {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     'Authorization': `Bearer ${process.env.VAPI_API_KEY}`
-      //   },
-      //   body: JSON.stringify({
-      //     phoneNumber: lead.phoneNumber,
-      //     name: lead.name,
-      //     phoneId
-      //     // Additional parameters required by VAPI.AI
-      //   })
-      // });
-      
-      // const result = await response.json();
-      
-      // For simulation purposes, we'll create a mock response
-      const mockResponse: VapiCallResponse = {
-        callId: `call_${Math.random().toString(36).substring(2, 10)}`,
-        status: "in_progress"
+      // Prepare the API call parameters
+      const callParams: VapiCallParams = {
+        phoneNumber: lead.phoneNumber,
+        name: lead.name,
+        phoneId
       };
       
-      // Update the lead with the phone ID and change status
+      // Get the API key from environment variables
+      const apiKey = import.meta.env.VITE_VAPI_API_KEY;
+      
+      if (!apiKey) {
+        throw new Error("VAPI API key not found");
+      }
+      
+      // Make the actual API call to VAPI.AI
+      const response = await fetch('https://api.vapi.ai/call', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify(callParams)
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(`VAPI API error: ${errorData.message || response.statusText}`);
+      }
+      
+      const result: VapiCallResponse = await response.json();
+      
+      // Update phone ID usage in the database
+      await incrementPhoneIdUsage(phoneId);
+      
+      // Update the lead with the call information
       const updatedLead: Lead = {
         ...lead,
         phoneId,
@@ -64,13 +72,29 @@ export class VapiService {
         updatedAt: new Date()
       };
       
-      // Update the phone ID usage count
-      const updatedPhoneIds = incrementPhoneIdUsage(phoneIds, phoneId);
+      // Store the updated lead in Supabase
+      const { error } = await supabase
+        .from('leads')
+        .upsert({
+          id: updatedLead.id,
+          name: updatedLead.name,
+          phone_number: updatedLead.phoneNumber,
+          phone_id: updatedLead.phoneId,
+          status: updatedLead.status,
+          disposition: updatedLead.disposition,
+          duration: updatedLead.duration,
+          cost: updatedLead.cost,
+          created_at: updatedLead.createdAt.toISOString(),
+          updated_at: updatedLead.updatedAt?.toISOString() || new Date().toISOString()
+        }, { onConflict: 'id' });
+        
+      if (error) {
+        console.error('Error updating lead in database:', error);
+        throw new Error('Failed to update lead in database');
+      }
       
-      return {
-        updatedLead,
-        updatedPhoneIds
-      };
+      return updatedLead;
+      
     } catch (error) {
       console.error("Error making VAPI call:", error);
       
@@ -81,36 +105,46 @@ export class VapiService {
         updatedAt: new Date()
       };
       
-      return {
-        updatedLead,
-        updatedPhoneIds: phoneIds
-      };
+      // Store the failed lead in Supabase
+      await supabase
+        .from('leads')
+        .upsert({
+          id: updatedLead.id,
+          name: updatedLead.name,
+          phone_number: updatedLead.phoneNumber,
+          status: updatedLead.status,
+          updated_at: updatedLead.updatedAt?.toISOString() || new Date().toISOString()
+        }, { onConflict: 'id' });
+        
+      throw error;
     }
   }
   
-  // This method would process a webhook response from VAPI.AI
-  static processCallWebhook(
-    webhookData: any,
-    leads: Lead[]
-  ): Lead {
-    // In a real implementation, we would match the webhook data to a specific lead
-    // For simulation, we'll just return a mock updated lead
-    const leadToUpdate = leads.find(lead => lead.id === webhookData.leadId);
-    
-    if (!leadToUpdate) {
-      throw new Error("Lead not found for the webhook data");
+  // Update call statistics in the database
+  static async updateCallStats(stats: {
+    completedCalls: number;
+    inProgressCalls: number;
+    remainingCalls: number;
+    failedCalls: number;
+    totalMinutes: number;
+    totalCost: number;
+  }): Promise<void> {
+    const { error } = await supabase
+      .from('call_stats')
+      .upsert({
+        id: '00000000-0000-0000-0000-000000000001', // Use a fixed ID for the stats record
+        completed_calls: stats.completedCalls,
+        in_progress_calls: stats.inProgressCalls,
+        remaining_calls: stats.remainingCalls,
+        failed_calls: stats.failedCalls,
+        total_minutes: stats.totalMinutes,
+        total_cost: stats.totalCost,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+      
+    if (error) {
+      console.error('Error updating call stats:', error);
+      throw new Error('Failed to update call stats in database');
     }
-    
-    const duration = Number(webhookData.duration || Math.random() * 5 + 1);
-    const cost = duration * 0.99;
-    
-    return {
-      ...leadToUpdate,
-      status: CallStatus.COMPLETED,
-      disposition: webhookData.disposition || "Completed",
-      duration,
-      cost,
-      updatedAt: new Date()
-    };
   }
 }
