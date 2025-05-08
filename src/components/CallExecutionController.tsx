@@ -7,7 +7,7 @@ import { VapiService } from "@/lib/vapiService";
 import { PacingControls } from "@/components/PacingControls";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchLeadsFromDatabase } from "@/lib/leadUtils";
-import { supabase } from "@/lib/supabase/client";
+import { supabase, isMockClient } from "@/lib/supabase/client";
 
 interface CallExecutionControllerProps {
   initialPacingRate?: number;
@@ -20,14 +20,19 @@ export const CallExecutionController = ({
   const [isExecuting, setIsExecuting] = useState(false);
   const [pacingRate, setPacingRate] = useState<number>(initialPacingRate);
   const [executionInterval, setExecutionInterval] = useState<NodeJS.Timeout | null>(null);
+  const usingMockClient = isMockClient();
   
   const { data: leads = [] } = useQuery({
     queryKey: ['leads'],
-    queryFn: fetchLeadsFromDatabase
+    queryFn: fetchLeadsFromDatabase,
+    // Don't attempt to fetch data if we're using the mock client
+    enabled: !usingMockClient
   });
 
   // Set up real-time subscription to listen for lead updates
   useEffect(() => {
+    if (usingMockClient) return;
+    
     const subscription = supabase
       .channel('leads-changes')
       .on(
@@ -47,7 +52,7 @@ export const CallExecutionController = ({
     return () => {
       subscription.unsubscribe();
     };
-  }, [queryClient]);
+  }, [queryClient, usingMockClient]);
   
   // Clean up on unmount
   useEffect(() => {
@@ -96,6 +101,11 @@ export const CallExecutionController = ({
   }, [leads, queryClient]);
   
   const startExecution = useCallback(() => {
+    if (usingMockClient) {
+      toast.error("Cannot start execution: Supabase connection not configured");
+      return;
+    }
+    
     const pendingLeads = leads.filter(lead => lead.status === CallStatus.PENDING);
     
     if (pendingLeads.length === 0) {
@@ -113,7 +123,7 @@ export const CallExecutionController = ({
     const interval = setInterval(processSingleLead, intervalMs);
     setExecutionInterval(interval);
     
-  }, [leads, pacingRate, processSingleLead]);
+  }, [leads, pacingRate, processSingleLead, usingMockClient]);
   
   const stopExecution = useCallback(() => {
     if (executionInterval) {
@@ -132,14 +142,14 @@ export const CallExecutionController = ({
       <PacingControls 
         currentPacing={pacingRate} 
         onChange={handlePacingChange}
-        disabled={isExecuting} 
+        disabled={isExecuting || usingMockClient} 
       />
       <div className="flex gap-2">
         {!isExecuting ? (
           <Button 
             onClick={startExecution}
             className="bg-blue-600 hover:bg-blue-700"
-            disabled={pendingCount === 0}
+            disabled={pendingCount === 0 || usingMockClient}
           >
             Start Execution
           </Button>
