@@ -103,7 +103,7 @@ export const CallExecutionController = ({
 
       await VapiService.makeCall({
         ...leadToProcess,
-        phone_id: phoneId
+        phoneId // Using phoneId (camelCase) to match Lead type
       });
       
       // Refresh the leads data

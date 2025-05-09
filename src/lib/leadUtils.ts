@@ -29,33 +29,13 @@ export const uploadLeads = async (file: File): Promise<Lead[]> => {
           return;
         }
         
-        // Update call stats with the new remaining calls
-        const { data: existingStats } = await supabase
-          .from('call_stats')
-          .select('*')
-          .eq('id', '00000000-0000-0000-0000-000000000001')
-          .single();
-          
-        if (existingStats) {
-          await supabase
-            .from('call_stats')
-            .update({
-              remaining_calls: existingStats.remaining_calls + leads.length,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', '00000000-0000-0000-0000-000000000001');
-        } else {
-          await supabase
-            .from('call_stats')
-            .insert({
-              id: '00000000-0000-0000-0000-000000000001',
-              remaining_calls: leads.length,
-              completed_calls: 0,
-              in_progress_calls: 0,
-              failed_calls: 0,
-              total_minutes: 0,
-              total_cost: 0
-            });
+        // For call stats management, we'll implement a client-side approach 
+        // since the call_stats table may not be available yet
+        try {
+          // Attempt to update call stats but handle gracefully if table doesn't exist
+          await updateCallStatsForNewLeads(leads.length);
+        } catch (statsError) {
+          console.warn('Could not update call stats, continuing:', statsError);
         }
         
         resolve(leads);
@@ -70,6 +50,20 @@ export const uploadLeads = async (file: File): Promise<Lead[]> => {
     
     reader.readAsText(file);
   });
+};
+
+const updateCallStatsForNewLeads = async (newLeadCount: number): Promise<void> => {
+  try {
+    // First try to fetch existing stats
+    const { data } = await supabase
+      .rpc('update_remaining_calls', { add_count: newLeadCount })
+      .single();
+      
+    console.log('Updated call stats:', data);
+  } catch (error) {
+    console.warn('Could not update call stats via RPC, table may not exist:', error);
+    // If the RPC fails, we'll just continue without updating stats
+  }
 };
 
 export const fetchLeadsFromDatabase = async (): Promise<Lead[]> => {
@@ -98,35 +92,59 @@ export const fetchLeadsFromDatabase = async (): Promise<Lead[]> => {
 };
 
 export const fetchCallStats = async () => {
-  const { data, error } = await supabase
-    .from('call_stats')
-    .select('*')
-    .eq('id', '00000000-0000-0000-0000-000000000001')
-    .single();
-    
-  if (error && error.code !== 'PGRST116') { // PGRST116 is "No rows found"
-    console.error('Error fetching call stats:', error);
-    throw new Error('Failed to fetch call stats from database');
+  try {
+    // Try to use the RPC if it exists
+    const { data, error } = await supabase
+      .rpc('get_call_stats')
+      .single();
+      
+    if (!error && data) {
+      return {
+        completedCalls: data.completed_calls || 0,
+        inProgressCalls: data.in_progress_calls || 0,
+        remainingCalls: data.remaining_calls || 0,
+        failedCalls: data.failed_calls || 0,
+        totalMinutes: data.total_minutes || 0,
+        totalCost: data.total_cost || 0
+      };
+    }
+  } catch (e) {
+    console.warn('Could not fetch call stats via RPC:', e);
   }
   
-  if (!data) {
-    return {
-      completedCalls: 0,
-      inProgressCalls: 0,
-      remainingCalls: 0,
-      failedCalls: 0,
-      totalMinutes: 0,
-      totalCost: 0
-    };
+  // If RPC fails, calculate stats from the leads table
+  try {
+    const { data: leads } = await supabase
+      .from('leads')
+      .select('status');
+      
+    if (leads) {
+      const completedCalls = leads.filter(l => l.status === CallStatus.COMPLETED).length;
+      const inProgressCalls = leads.filter(l => l.status === CallStatus.IN_PROGRESS).length;
+      const failedCalls = leads.filter(l => l.status === CallStatus.FAILED).length;
+      const pendingCalls = leads.filter(l => l.status === CallStatus.PENDING).length;
+      
+      return {
+        completedCalls,
+        inProgressCalls,
+        remainingCalls: pendingCalls,
+        failedCalls,
+        totalMinutes: 0, // We don't have this information without the call_stats table
+        totalCost: 0     // We don't have this information without the call_stats table
+      };
+    }
+  } catch (e) {
+    console.error('Error calculating call stats from leads:', e);
   }
   
+  // Return default values if all fails
   return {
-    completedCalls: data.completed_calls,
-    inProgressCalls: data.in_progress_calls,
-    remainingCalls: data.remaining_calls,
-    failedCalls: data.failed_calls,
-    totalMinutes: data.total_minutes,
-    totalCost: data.total_cost
+    completedCalls: 0,
+    inProgressCalls: 0,
+    remainingCalls: 0,
+    failedCalls: 0,
+    totalMinutes: 0,
+    totalCost: 0
   };
 };
 
