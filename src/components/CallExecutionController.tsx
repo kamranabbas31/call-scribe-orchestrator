@@ -14,6 +14,16 @@ interface CallExecutionControllerProps {
   initialPacingRate?: number;
 }
 
+// Create a hook to get the uploaded leads
+const useUploadedLeads = () => {
+  const { data = [] } = useQuery({
+    queryKey: ['leads'],
+    queryFn: fetchLeadsFromDatabase
+  });
+  
+  return data;
+};
+
 export const CallExecutionController = ({
   initialPacingRate = 1
 }: CallExecutionControllerProps) => {
@@ -23,7 +33,7 @@ export const CallExecutionController = ({
   const [executionInterval, setExecutionInterval] = useState<NodeJS.Timeout | null>(null);
   const usingMockClient = isMockClient();
   
-  const leads = useUploadedLeads(); // Already imported from "@/lib/leadUtils"
+  const leads = useUploadedLeads();
 
   // Set up real-time subscription to listen for lead updates
   useEffect(() => {

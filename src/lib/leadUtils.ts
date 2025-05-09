@@ -64,7 +64,7 @@ export const uploadLeads = async (file: File): Promise<Lead[]> => {
       }
     };
     
-    reader.onerror = (e) => {
+    reader.onerror = () => {
       reject(new Error("Error reading the file"));
     };
     
@@ -73,40 +73,28 @@ export const uploadLeads = async (file: File): Promise<Lead[]> => {
 };
 
 export const fetchLeadsFromDatabase = async (): Promise<Lead[]> => {
-  const leads: Lead[] = [];
-
-  try {
-    const response = await fetch('/leads.csv');
-    const csvText = await response.text();
-
-    const lines = csvText.trim().split('\n');
-    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-
-    const nameIndex = headers.findIndex(h => h === 'name');
-    const phoneIndex = headers.findIndex(h => h === 'phone');
-
-    if (nameIndex === -1 || phoneIndex === -1) {
-      throw new Error("CSV must contain 'name' and 'phone' columns");
-    }
-
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',');
-
-      if (values.length < 2) continue;
-
-      leads.push({
-        id: i.toString(),
-        name: values[nameIndex].trim(),
-        phone: values[phoneIndex].trim(),
-        status: CallStatus.PENDING,
-      });
-    }
-
-    return leads;
-  } catch (err) {
-    console.error('Error loading CSV leads:', err);
-    return [];
+  const { data, error } = await supabase
+    .from('leads')
+    .select('*')
+    .order('created_at', { ascending: false });
+    
+  if (error) {
+    console.error('Error fetching leads:', error);
+    throw error;
   }
+  
+  return (data || []).map(lead => ({
+    id: lead.id,
+    name: lead.name,
+    phoneNumber: lead.phone_number,
+    phoneId: lead.phone_id,
+    status: lead.status as CallStatus,
+    disposition: lead.disposition,
+    duration: lead.duration,
+    cost: lead.cost,
+    createdAt: new Date(lead.created_at),
+    updatedAt: lead.updated_at ? new Date(lead.updated_at) : undefined
+  }));
 };
 
 export const fetchCallStats = async () => {
