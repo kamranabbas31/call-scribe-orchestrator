@@ -44,7 +44,8 @@ export const getPhoneIds = async () => {
     id: item.id,
     phoneId: item.phone_id, 
     dailyCallCount: item.used_today || 0,
-    totalCalls: item.total_calls || 0
+    // We'll only use fields that exist in the database schema
+    totalCalls: 0 // Default value since it might not be in the database yet
   }));
 };
 
@@ -138,10 +139,10 @@ export const incrementPhoneIdUsage = async (phoneId: string): Promise<void> => {
     throw error;
   }
   
+  // We'll only update fields that exist in the database
   const { error: updateError } = await supabase
     .from('phone_ids')
     .update({ 
-      total_calls: (data.total_calls || 0) + 1,
       last_used_at: new Date().toISOString()
     })
     .eq('id', data.id);

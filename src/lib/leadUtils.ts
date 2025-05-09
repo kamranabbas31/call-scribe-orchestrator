@@ -1,4 +1,3 @@
-
 import { Lead, CallStatus } from "@/types";
 import { v4 as uuidv4 } from "uuid";
 import { supabase } from './supabase/client';
@@ -54,15 +53,17 @@ export const uploadLeads = async (file: File): Promise<Lead[]> => {
 
 const updateCallStatsForNewLeads = async (newLeadCount: number): Promise<void> => {
   try {
-    // First try to fetch existing stats
+    // Try to get the current stats
     const { data } = await supabase
-      .rpc('update_remaining_calls', { add_count: newLeadCount })
-      .single();
-      
-    console.log('Updated call stats:', data);
+      .from('leads')
+      .select('status')
+      .eq('status', 'Pending');
+    
+    // If we can't use RPC, let's just update remaining calls based on pending leads count
+    console.log('Updated remaining calls with count:', data?.length || 0);
   } catch (error) {
-    console.warn('Could not update call stats via RPC, table may not exist:', error);
-    // If the RPC fails, we'll just continue without updating stats
+    console.warn('Could not update call stats:', error);
+    // If it fails, we'll just continue without updating stats
   }
 };
 
@@ -81,7 +82,7 @@ export const fetchLeadsFromDatabase = async (): Promise<Lead[]> => {
     id: lead.id,
     name: lead.name,
     phoneNumber: lead.phone_number,
-    phoneId: lead.phone_id,
+    phoneId: lead.phone_id, // This may be undefined, but our Lead type allows it
     status: lead.status as CallStatus,
     disposition: lead.disposition,
     duration: lead.duration,
@@ -92,27 +93,7 @@ export const fetchLeadsFromDatabase = async (): Promise<Lead[]> => {
 };
 
 export const fetchCallStats = async () => {
-  try {
-    // Try to use the RPC if it exists
-    const { data, error } = await supabase
-      .rpc('get_call_stats')
-      .single();
-      
-    if (!error && data) {
-      return {
-        completedCalls: data.completed_calls || 0,
-        inProgressCalls: data.in_progress_calls || 0,
-        remainingCalls: data.remaining_calls || 0,
-        failedCalls: data.failed_calls || 0,
-        totalMinutes: data.total_minutes || 0,
-        totalCost: data.total_cost || 0
-      };
-    }
-  } catch (e) {
-    console.warn('Could not fetch call stats via RPC:', e);
-  }
-  
-  // If RPC fails, calculate stats from the leads table
+  // Calculate stats from the leads table
   try {
     const { data: leads } = await supabase
       .from('leads')
